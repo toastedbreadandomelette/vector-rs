@@ -18,6 +18,10 @@ use core::slice::ArrayWindows;
 use core::slice::{ArrayChunks, ArrayChunksMut};
 #[cfg(feature = "slice_group_by")]
 use core::slice::{GroupBy, GroupByMut};
+#[cfg(feature = "slice_concat_trait")]
+use alloc::slice::Join;
+#[cfg(feature = "slice_concat_trait")]
+use alloc::slice::Concat;
 
 extern crate alloc;
 
@@ -715,6 +719,141 @@ impl<T> Drop for Vector<T> {
     fn drop(&mut self) {
         // UNSAFE: Deallocate the pointer, no other handling to perform
         unsafe { alloc::alloc::dealloc(self.ptr.cast::<u8>(), self.layout) }
+    }
+}
+
+#[cfg(feature = "slice_concat_trait")]
+impl<T: Copy> Join<T> for Vector<Vector<T>> {
+    type Output = Vector<T>;
+
+    fn join(slice: &Self, sep: T) -> Self::Output {
+        let first = match slice.first() {
+            Some(vec) => vec,
+            None => return Vector::new(0)
+        };
+        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + 1 + curr.len());
+
+        let mut result = Vector::with_capacity(size);
+        result.extend_from_slice(first);
+
+        slice.iter().skip(1).for_each(|sl| {
+            result.push(sep);
+            result.extend_from_slice(sl);
+        });
+
+        result
+    }
+}
+
+#[cfg(feature = "slice_concat_trait")]
+impl<T: Copy> Join<T> for Vector<&[T]> {
+    type Output = Vector<T>;
+
+    fn join(slice: &Self, sep: T) -> Self::Output {
+        let first = match slice.first() {
+            Some(vec) => vec,
+            None => return Vector::new(0)
+        };
+        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + 1 + curr.len());
+
+        let mut result = Vector::with_capacity(size);
+        result.extend_from_slice(first);
+
+        slice.iter().skip(1).for_each(|sl| {
+            result.push(sep);
+            result.extend_from_slice(sl);
+        });
+
+        result
+    }
+}
+
+#[cfg(feature = "slice_concat_trait")]
+impl<T> Join<[T]> for Vector<Vector<T>> where T: Copy, [T]: Sized {
+    type Output = Vector<T>;
+
+    fn join(slice: &Self, sep: [T]) -> Self::Output {
+        let first = match slice.first() {
+            Some(vec) => vec,
+            None => return Vector::new(0)
+        };
+        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + 1 + curr.len());
+
+        let mut result = Vector::with_capacity(size);
+        result.extend_from_slice(first);
+
+        slice.iter().skip(1).for_each(|sl| {
+            result.extend_from_slice(&sep);
+            result.extend_from_slice(sl);
+        });
+
+        result
+    }
+}
+
+#[cfg(feature = "slice_concat_trait")]
+impl<T: Copy> Concat<T> for Vector<Vector<T>> {
+    type Output = Vector<T>;
+
+    fn concat(slice: &Self) -> Self::Output {
+        let first = match slice.first() {
+            Some(vec) => vec,
+            None => return Vector::new(0)
+        };
+        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + curr.len());
+
+        let mut result = Vector::with_capacity(size);
+        result.extend_from_slice(first);
+
+        slice.iter().skip(1).for_each(|sl| {
+            result.extend_from_slice(sl);
+        });
+
+        result
+    }
+}
+
+#[cfg(feature = "slice_concat_trait")]
+impl<T: Copy> Concat<T> for Vector<&[T]> {
+    type Output = Vector<T>;
+
+    fn concat(slice: &Self) -> Self::Output {
+        let first = match slice.first() {
+            Some(vec) => vec,
+            None => return Vector::new(0)
+        };
+        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + curr.len());
+
+        let mut result = Vector::with_capacity(size);
+        result.extend_from_slice(first);
+
+        slice.iter().skip(1).for_each(|sl| {
+            result.extend_from_slice(sl);
+        });
+
+        result
+    }
+}
+
+#[cfg(feature = "slice_concat_trait")]
+impl<T> Concat<[T]> for Vector<[T]> where T: Copy, [T]: Sized {
+    type Output = Vector<T>;
+
+    fn concat(slice: &Self) -> Self::Output {
+        let first = match slice.first() {
+            Some(vec) => vec,
+            None => return Vector::new(0)
+        };
+        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + curr.len());
+
+        let mut result = Vector::with_capacity(size);
+        result.extend_from_slice(first);
+
+        slice.iter().skip(1).for_each(|sl| {
+            result.extend_from_slice(sl);
+        });
+
+        result
     }
 }
 
