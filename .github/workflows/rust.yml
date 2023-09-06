@@ -22,9 +22,12 @@ jobs:
       run: cargo test --verbose
     
   clippy:
-  - uses: actions/checkout@v3
-  - name: rustup component add clippy
-  - uses: actions-rs/clippy-check@v1
-    with:
-      token: ${{ secrets.GITHUB_TOKEN }}
-      args: --all-features
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    - name: rustup component add clippy
+    - uses: actions-rs/clippy-check@v1
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        args: --all-features
