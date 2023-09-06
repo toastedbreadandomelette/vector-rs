@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(slice_concat_trait)]
 /// Custom `Vector` implementation that also supports `#![no_std]`.
 use core::alloc::Layout;
 use core::fmt::Debug;
