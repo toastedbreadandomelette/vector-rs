@@ -892,15 +892,11 @@ mod tests {
         new_arr.extend_from_iter(&mut vec.iter());
 
         assert_eq!(new_arr.len(), 100 + 65536);
-        // According to array alignment constraints, nearest big
-        // value divisble by 32 is the below number.
         assert_eq!(new_arr.cap(), 65536 + 100);
 
         let another_arr: Vector<u32> = (0..1928).collect();
         new_arr.extend_from_iter(&mut another_arr.iter());
         assert_eq!(new_arr.len(), 100 + 1928 + 65536);
-        // According to array alignment constraints, nearest big
-        // value divisble by 32 is the below number.
         assert_eq!(new_arr.cap(), 100 + 1928 + 65536);
 
         assert!(new_arr
@@ -921,7 +917,6 @@ mod tests {
     #[test]
     pub fn test_mutate_add() {
         // Collect uses mutate_add: therefore, increases capacity 2 times
-        // if exceeds, but base size is 32.
         let mut new_arr: Vector<u32> = (0..100).collect();
         assert_eq!(new_arr.len(), 100);
         assert_eq!(new_arr.cap(), 128);
