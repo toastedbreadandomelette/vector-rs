@@ -3,25 +3,26 @@
 use core::alloc::Layout;
 use core::fmt::Debug;
 use core::ops::{
-    Deref, DerefMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
+    Deref, DerefMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
+    RangeToInclusive,
 };
 use core::ops::{Index, IndexMut};
-use core::ptr::copy_nonoverlapping;
+use core::ptr::{copy_nonoverlapping, NonNull};
 use core::slice::{
-    from_raw_parts, from_raw_parts_mut, Chunks, ChunksExact, ChunksExactMut, ChunksMut, Iter,
-    IterMut, Windows,
+    from_raw_parts, from_raw_parts_mut, Chunks, ChunksExact, ChunksExactMut,
+    ChunksMut, Iter, IterMut, Windows,
 };
 
+#[cfg(feature = "slice_concat_trait")]
+use alloc::slice::Concat;
+#[cfg(feature = "slice_concat_trait")]
+use alloc::slice::Join;
 #[cfg(feature = "array_windows")]
 use core::slice::ArrayWindows;
 #[cfg(feature = "array_chunks")]
 use core::slice::{ArrayChunks, ArrayChunksMut};
 #[cfg(feature = "slice_group_by")]
 use core::slice::{GroupBy, GroupByMut};
-#[cfg(feature = "slice_concat_trait")]
-use alloc::slice::Join;
-#[cfg(feature = "slice_concat_trait")]
-use alloc::slice::Concat;
 
 extern crate alloc;
 
@@ -29,14 +30,14 @@ extern crate alloc;
 ///
 /// This struct will have constant heap allocated value for type [`T`]
 /// and would only implement traits for following types:
-/// 
+///
 /// - [`Index`] (for type [`usize`], [`Range`], [`RangeInclusive`] (and maybe [`isize`]))
 /// - [`IndexMut`] (for type [`usize`], [`Range`], [`RangeInclusive`] (and maybe [`isize`]))
 /// - [`Iterator`]
 /// - [`IntoIterator`]
 pub struct Vector<T> {
     /// Pointer to the array
-    ptr: *mut T,
+    ptr: NonNull<T>,
     /// Layout defined by the declared type
     /// This contains the total size in bytes with the alignment
     layout: Layout,
@@ -51,7 +52,9 @@ where
     T: Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        unsafe { core::slice::from_raw_parts(self.ptr, self.len).fmt(f) }
+        unsafe {
+            core::slice::from_raw_parts(self.ptr.as_ptr(), self.len).fmt(f)
+        }
     }
 }
 
@@ -73,7 +76,8 @@ impl<T> Vector<T> {
                 core::mem::align_of::<T>(),
             );
             Self {
-                ptr: alloc::alloc::alloc(layout).cast::<T>(),
+                ptr: NonNull::new(alloc::alloc::alloc(layout).cast::<T>())
+                    .unwrap(),
                 layout,
                 len,
                 capacity: len,
@@ -91,7 +95,8 @@ impl<T> Vector<T> {
                 core::mem::align_of::<T>(),
             );
             Self {
-                ptr: alloc::alloc::alloc(layout).cast::<T>(),
+                ptr: NonNull::new(alloc::alloc::alloc(layout).cast::<T>())
+                    .unwrap(),
                 layout,
                 len: 0,
                 capacity: len,
@@ -216,18 +221,31 @@ impl<T> Vector<T> {
         if self.len == 0 {
             None
         } else {
-            let value = unsafe { self.ptr.add(self.len - 1).read() };
+            let value = unsafe { self.ptr.as_ptr().add(self.len - 1).read() };
             if (self.len - 1) * 2 <= self.capacity {
                 let new_layout = unsafe {
                     let new_byte_size = Self::to_byte_len(self.len - 1);
-                    Layout::from_size_align_unchecked(new_byte_size, core::mem::align_of::<T>())
+                    Layout::from_size_align_unchecked(
+                        new_byte_size,
+                        core::mem::align_of::<T>(),
+                    )
                 };
 
                 self.ptr = unsafe {
                     // Documentation states that this will be deprecated.
-                    let new_ptr = alloc::alloc::alloc_zeroed(new_layout).cast::<T>();
-                    copy_nonoverlapping(self.ptr, new_ptr, self.len - 1);
-                    alloc::alloc::dealloc(self.ptr.cast::<u8>(), self.layout);
+                    let new_ptr = NonNull::new(
+                        alloc::alloc::alloc_zeroed(new_layout).cast::<T>(),
+                    )
+                    .unwrap();
+                    copy_nonoverlapping(
+                        self.ptr.as_ptr(),
+                        new_ptr.as_ptr(),
+                        self.len - 1,
+                    );
+                    alloc::alloc::dealloc(
+                        self.ptr.cast::<u8>().as_ptr(),
+                        self.layout,
+                    );
                     new_ptr
                 };
                 self.layout = new_layout;
@@ -243,28 +261,41 @@ impl<T> Vector<T> {
     fn mutate_add(&mut self, element: T) {
         if self.len == 0 {
             *self = Self::zeroed(1);
-            unsafe { self.ptr.write(element) };
+            unsafe { self.ptr.as_ptr().write(element) };
         } else {
             if self.len == self.capacity {
                 // Allocate 2 times the current size of memory.
                 // A new layout is created here
                 let new_layout = unsafe {
                     let new_byte_size = Self::to_byte_len(self.len * 2);
-                    Layout::from_size_align_unchecked(new_byte_size, core::mem::align_of::<T>())
+                    Layout::from_size_align_unchecked(
+                        new_byte_size,
+                        core::mem::align_of::<T>(),
+                    )
                 };
 
                 self.ptr = unsafe {
                     // Documentation states that this will be deprecated.
-                    let new_ptr = alloc::alloc::alloc_zeroed(new_layout).cast::<T>();
-                    copy_nonoverlapping(self.ptr, new_ptr, self.len);
-                    alloc::alloc::dealloc(self.ptr.cast::<u8>(), self.layout);
+                    let new_ptr = NonNull::new(
+                        alloc::alloc::alloc_zeroed(new_layout).cast::<T>(),
+                    )
+                    .unwrap();
+                    copy_nonoverlapping(
+                        self.ptr.as_ptr(),
+                        new_ptr.as_ptr(),
+                        self.len,
+                    );
+                    alloc::alloc::dealloc(
+                        self.ptr.as_ptr().cast::<u8>(),
+                        self.layout,
+                    );
                     new_ptr
                 };
                 self.layout = new_layout;
                 self.capacity = self.len * 2;
             }
             // Finally write to the pointer
-            unsafe { self.ptr.add(self.len).write(element) };
+            unsafe { self.ptr.as_ptr().add(self.len).write(element) };
             self.len += 1;
         }
     }
@@ -277,7 +308,9 @@ impl<T> Vector<T> {
         // of extending the array.
         if self.capacity < self.len + extra_capacity {
             // Remove the excess capacity
-            self.mutate_capacity_by_ignore_current(extra_capacity - (self.capacity - self.len));
+            self.mutate_capacity_by_ignore_current(
+                extra_capacity - (self.capacity - self.len),
+            );
         }
     }
 
@@ -297,15 +330,26 @@ impl<T> Vector<T> {
         } else {
             // Allocate precise extra capacity, with extra space for alignment
             let new_layout = unsafe {
-                let new_byte_size = Self::to_byte_len(self.capacity + extra_capacity);
+                let new_byte_size =
+                    Self::to_byte_len(self.capacity + extra_capacity);
                 Layout::from_size_align_unchecked(new_byte_size, 0x08)
             };
 
             self.ptr = unsafe {
                 // Documentation states that this will be deprecated.
-                let new_ptr = alloc::alloc::alloc_zeroed(new_layout).cast::<T>();
-                copy_nonoverlapping(self.ptr, new_ptr, self.len);
-                alloc::alloc::dealloc(self.ptr.cast::<u8>(), self.layout);
+                let new_ptr = NonNull::new(
+                    alloc::alloc::alloc_zeroed(new_layout).cast::<T>(),
+                )
+                .unwrap();
+                copy_nonoverlapping(
+                    self.ptr.as_ptr(),
+                    new_ptr.as_ptr(),
+                    self.len,
+                );
+                alloc::alloc::dealloc(
+                    self.ptr.as_ptr().cast::<u8>(),
+                    self.layout,
+                );
                 new_ptr
             };
             self.layout = new_layout;
@@ -369,13 +413,13 @@ impl<T> Vector<T> {
     /// Returns the borrowed values from iterator
     #[inline(always)]
     pub fn iter(&self) -> Iter<'_, T> {
-        unsafe { from_raw_parts(self.ptr, self.len).iter() }
+        unsafe { from_raw_parts(self.ptr.as_ptr(), self.len).iter() }
     }
 
     /// Returns the mutable borrowed iterator
     #[inline(always)]
     pub fn iter_mut(&mut self) -> IterMut<'_, T> {
-        unsafe { from_raw_parts_mut(self.ptr, self.len).iter_mut() }
+        unsafe { from_raw_parts_mut(self.ptr.as_ptr(), self.len).iter_mut() }
     }
 
     /// Returns the chunks of `n` size
@@ -383,7 +427,9 @@ impl<T> Vector<T> {
     /// Remainder will yield array of `len < chunk_size`
     #[inline(always)]
     pub fn chunks(&self, chunk_size: usize) -> Chunks<'_, T> {
-        unsafe { from_raw_parts(self.ptr, self.len).chunks(chunk_size) }
+        unsafe {
+            from_raw_parts(self.ptr.as_ptr(), self.len).chunks(chunk_size)
+        }
     }
 
     /// Returns the chunks of exactly `n` size
@@ -392,7 +438,9 @@ impl<T> Vector<T> {
     /// iterator [`ChunkExact`]
     #[inline(always)]
     pub fn chunks_exact(&self, chunk_size: usize) -> ChunksExact<'_, T> {
-        unsafe { from_raw_parts(self.ptr, self.len).chunks_exact(chunk_size) }
+        unsafe {
+            from_raw_parts(self.ptr.as_ptr(), self.len).chunks_exact(chunk_size)
+        }
     }
 
     /// Returns the mutable slice of `n` size
@@ -400,7 +448,10 @@ impl<T> Vector<T> {
     /// Remainder will yield array of `len < chunk_size`
     #[inline(always)]
     pub fn chunks_mut(&self, chunk_size: usize) -> ChunksMut<'_, T> {
-        unsafe { from_raw_parts_mut(self.ptr, self.len).chunks_mut(chunk_size) }
+        unsafe {
+            from_raw_parts_mut(self.ptr.as_ptr(), self.len)
+                .chunks_mut(chunk_size)
+        }
     }
 
     /// Returns the mutable chunks of exactly `n` size
@@ -409,7 +460,10 @@ impl<T> Vector<T> {
     /// iterator [`ChunkExactMut`]
     #[inline(always)]
     pub fn chunks_exact_mut(&self, chunk_size: usize) -> ChunksExactMut<'_, T> {
-        unsafe { from_raw_parts_mut(self.ptr, self.len).chunks_exact_mut(chunk_size) }
+        unsafe {
+            from_raw_parts_mut(self.ptr.as_ptr(), self.len)
+                .chunks_exact_mut(chunk_size)
+        }
     }
 
     /// Returns the window iterator of exactly `n` size, iterating through
@@ -418,7 +472,9 @@ impl<T> Vector<T> {
     /// If window size is larger than the slice, then it won't yield a slice.
     #[inline(always)]
     pub fn windows(&self, window_size: usize) -> Windows<'_, T> {
-        unsafe { from_raw_parts_mut(self.ptr, self.len).windows(window_size) }
+        unsafe {
+            from_raw_parts_mut(self.ptr.as_ptr(), self.len).windows(window_size)
+        }
     }
 
     /// Returns the window iterator of exactly `n` size, iterating through
@@ -428,7 +484,10 @@ impl<T> Vector<T> {
     #[inline(always)]
     #[cfg(feature = "array_chunks")]
     pub fn array_chunks<const SIZE: usize>(&self) -> VectorChunks<'_, T, SIZE> {
-        unsafe { from_raw_parts_mut(self.ptr, self.len).array_chunks::<SIZE>() }
+        unsafe {
+            from_raw_parts_mut(self.ptr.as_ptr(), self.len)
+                .array_chunks::<SIZE>()
+        }
     }
 
     /// Returns the window iterator of exactly `n` size, iterating through
@@ -437,15 +496,25 @@ impl<T> Vector<T> {
     /// If window size is larger, then it won't yield a slice.
     #[inline(always)]
     #[cfg(feature = "array_chunks")]
-    pub fn array_chunks_mut<const SIZE: usize>(&self) -> VectorChunksMut<'_, T, SIZE> {
-        unsafe { from_raw_parts_mut(self.ptr, self.len).array_chunks_mut::<SIZE>() }
+    pub fn array_chunks_mut<const SIZE: usize>(
+        &self,
+    ) -> VectorChunksMut<'_, T, SIZE> {
+        unsafe {
+            from_raw_parts_mut(self.ptr.as_ptr(), self.len)
+                .array_chunks_mut::<SIZE>()
+        }
     }
 
     /// Returns the static array window of exactly size `SIZE`
     #[inline(always)]
     #[cfg(feature = "array_windows")]
-    pub fn array_windows<const SIZE: usize>(&self) -> VectorWindows<'_, T, SIZE> {
-        unsafe { from_raw_parts_mut(self.ptr, self.len).array_windows::<SIZE>() }
+    pub fn array_windows<const SIZE: usize>(
+        &self,
+    ) -> VectorWindows<'_, T, SIZE> {
+        unsafe {
+            from_raw_parts_mut(self.ptr.as_ptr(), self.len)
+                .array_windows::<SIZE>()
+        }
     }
 
     /// Returns the slice group that separates the values based on condition
@@ -456,7 +525,9 @@ impl<T> Vector<T> {
     where
         F: FnMut(&T, &T) -> bool,
     {
-        unsafe { from_raw_parts_mut(self.ptr, self.len).group_by::<F>(f) }
+        unsafe {
+            from_raw_parts_mut(self.ptr.as_ptr(), self.len).group_by::<F>(f)
+        }
     }
 
     /// Returns the mutable slice group that separates the values based on condition
@@ -466,7 +537,9 @@ impl<T> Vector<T> {
     where
         F: FnMut(&T, &T) -> bool,
     {
-        unsafe { from_raw_parts_mut(self.ptr, self.len).group_by_mut::<F>(f) }
+        unsafe {
+            from_raw_parts_mut(self.ptr.as_ptr(), self.len).group_by_mut::<F>(f)
+        }
     }
 
     /// Create a new array filled with zero
@@ -487,7 +560,10 @@ impl<T> Vector<T> {
                 core::mem::align_of::<T>(),
             );
             Self {
-                ptr: alloc::alloc::alloc_zeroed(layout).cast::<T>(),
+                ptr: NonNull::new(
+                    alloc::alloc::alloc_zeroed(layout).cast::<T>(),
+                )
+                .unwrap(),
                 layout,
                 len,
                 capacity: len,
@@ -559,7 +635,7 @@ impl<T> Index<usize> for Vector<T> {
     #[inline]
     fn index(&self, index: usize) -> &Self::Output {
         debug_assert!(index < self.len);
-        unsafe { &*self.ptr.add(index) }
+        unsafe { &*self.ptr.as_ptr().add(index) }
     }
 }
 
@@ -586,7 +662,12 @@ impl<T> Index<Range<usize>> for Vector<T> {
     #[inline]
     fn index(&self, range: Range<usize>) -> &Self::Output {
         debug_assert!(range.start < self.len && range.end <= self.len);
-        unsafe { from_raw_parts(self.ptr.add(range.start), range.end - range.start) }
+        unsafe {
+            from_raw_parts(
+                self.ptr.as_ptr().add(range.start),
+                range.end - range.start,
+            )
+        }
     }
 }
 
@@ -601,7 +682,12 @@ impl<T> Index<RangeFrom<usize>> for Vector<T> {
     fn index(&self, range: RangeFrom<usize>) -> &Self::Output {
         // UNSAFE: Only way for this is to expose from raw parts
         debug_assert!(range.start < self.len);
-        unsafe { from_raw_parts(self.ptr.add(range.start), self.len - range.start) }
+        unsafe {
+            from_raw_parts(
+                self.ptr.as_ptr().add(range.start),
+                self.len - range.start,
+            )
+        }
     }
 }
 
@@ -611,7 +697,12 @@ impl<T> Index<RangeInclusive<usize>> for Vector<T> {
     #[inline]
     fn index(&self, range: RangeInclusive<usize>) -> &Self::Output {
         debug_assert!(*range.start() < self.len && *range.end() < self.len);
-        unsafe { from_raw_parts(self.ptr.add(*range.start()), *range.end() - *range.start()) }
+        unsafe {
+            from_raw_parts(
+                self.ptr.as_ptr().add(*range.start()),
+                *range.end() - *range.start(),
+            )
+        }
     }
 }
 
@@ -621,7 +712,7 @@ impl<T> Index<RangeTo<usize>> for Vector<T> {
     fn index(&self, range: RangeTo<usize>) -> &Self::Output {
         // UNSAFE: Only way for this is to expose from raw parts
         debug_assert!(range.end < self.len);
-        unsafe { from_raw_parts(self.ptr, range.end) }
+        unsafe { from_raw_parts(self.ptr.as_ptr(), range.end) }
     }
 }
 
@@ -632,7 +723,7 @@ impl<T> Index<RangeToInclusive<usize>> for Vector<T> {
     fn index(&self, range: RangeToInclusive<usize>) -> &Self::Output {
         // UNSAFE: Only way for this is to expose from raw parts
         debug_assert!(range.end < self.len);
-        unsafe { from_raw_parts(self.ptr, range.end) }
+        unsafe { from_raw_parts(self.ptr.as_ptr(), range.end) }
     }
 }
 
@@ -642,7 +733,7 @@ impl<T> Index<RangeFull> for Vector<T> {
     #[inline(always)]
     fn index(&self, _: RangeFull) -> &Self::Output {
         // UNSAFE: Only way for this is to expose from raw parts
-        unsafe { from_raw_parts(self.ptr, self.len) }
+        unsafe { from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 }
 
@@ -651,7 +742,12 @@ impl<T> IndexMut<Range<usize>> for Vector<T> {
     fn index_mut(&mut self, range: Range<usize>) -> &mut [T] {
         // UNSAFE: Only way for this is to expose from raw parts
         debug_assert!(range.start < self.len && range.end < self.len);
-        unsafe { &mut *from_raw_parts_mut(self.ptr.add(range.start), range.end - range.start) }
+        unsafe {
+            &mut *from_raw_parts_mut(
+                self.ptr.as_ptr().add(range.start),
+                range.end - range.start,
+            )
+        }
     }
 }
 
@@ -660,7 +756,12 @@ impl<T> IndexMut<RangeFrom<usize>> for Vector<T> {
     fn index_mut(&mut self, range: RangeFrom<usize>) -> &mut [T] {
         // UNSAFE: Only way for this is to expose from raw parts
         debug_assert!(range.start < self.len);
-        unsafe { &mut *from_raw_parts_mut(self.ptr.add(range.start), self.len - range.start) }
+        unsafe {
+            &mut *from_raw_parts_mut(
+                self.ptr.as_ptr().add(range.start),
+                self.len - range.start,
+            )
+        }
     }
 }
 
@@ -670,7 +771,10 @@ impl<T> IndexMut<RangeInclusive<usize>> for Vector<T> {
         // UNSAFE: Only way for this is to expose from raw parts
         debug_assert!(*range.start() < self.len && *range.end() < self.len);
         unsafe {
-            &mut *from_raw_parts_mut(self.ptr.add(*range.start()), *range.end() - *range.start())
+            &mut *from_raw_parts_mut(
+                self.ptr.as_ptr().add(*range.start()),
+                *range.end() - *range.start(),
+            )
         }
     }
 }
@@ -680,7 +784,7 @@ impl<T> IndexMut<RangeTo<usize>> for Vector<T> {
     fn index_mut(&mut self, range: RangeTo<usize>) -> &mut [T] {
         // UNSAFE: Only way for this is to expose from raw parts
         debug_assert!(range.end < self.len);
-        unsafe { &mut *from_raw_parts_mut(self.ptr, range.end) }
+        unsafe { &mut *from_raw_parts_mut(self.ptr.as_ptr(), range.end) }
     }
 }
 
@@ -689,7 +793,7 @@ impl<T> IndexMut<RangeToInclusive<usize>> for Vector<T> {
     fn index_mut(&mut self, range: RangeToInclusive<usize>) -> &mut [T] {
         // UNSAFE: Only way for this is to expose from raw parts
         debug_assert!(range.end < self.len);
-        unsafe { &mut *from_raw_parts_mut(self.ptr, range.end) }
+        unsafe { &mut *from_raw_parts_mut(self.ptr.as_ptr(), range.end) }
     }
 }
 
@@ -698,7 +802,7 @@ impl<T> IndexMut<RangeFull> for Vector<T> {
     #[inline(always)]
     fn index_mut(&mut self, _: RangeFull) -> &mut [T] {
         // UNSAFE: Only way for this is to expose from raw parts
-        unsafe { &mut *from_raw_parts_mut(self.ptr, self.len) }
+        unsafe { &mut *from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 }
 
@@ -709,7 +813,7 @@ impl<T> IndexMut<usize> for Vector<T> {
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut T {
         debug_assert!(index < self.len);
-        unsafe { &mut *self.ptr.add(index) }
+        unsafe { &mut *self.ptr.as_ptr().add(index) }
     }
 }
 
@@ -718,7 +822,9 @@ impl<T> Drop for Vector<T> {
     #[inline]
     fn drop(&mut self) {
         // UNSAFE: Deallocate the pointer, no other handling to perform
-        unsafe { alloc::alloc::dealloc(self.ptr.cast::<u8>(), self.layout) }
+        unsafe {
+            alloc::alloc::dealloc(self.ptr.as_ptr().cast::<u8>(), self.layout)
+        }
     }
 }
 
@@ -729,9 +835,12 @@ impl<T: Copy> Join<T> for Vector<Vector<T>> {
     fn join(slice: &Self, sep: T) -> Self::Output {
         let first = match slice.first() {
             Some(vec) => vec,
-            None => return Vector::new(0)
+            None => return Vector::new(0),
         };
-        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + 1 + curr.len());
+        let size = slice
+            .iter()
+            .skip(1)
+            .fold(first.len(), |prev, curr| prev + 1 + curr.len());
 
         let mut result = Vector::with_capacity(size);
         result.extend_from_slice(first);
@@ -752,9 +861,12 @@ impl<T: Copy> Join<T> for Vector<&[T]> {
     fn join(slice: &Self, sep: T) -> Self::Output {
         let first = match slice.first() {
             Some(vec) => vec,
-            None => return Vector::new(0)
+            None => return Vector::new(0),
         };
-        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + 1 + curr.len());
+        let size = slice
+            .iter()
+            .skip(1)
+            .fold(first.len(), |prev, curr| prev + 1 + curr.len());
 
         let mut result = Vector::with_capacity(size);
         result.extend_from_slice(first);
@@ -769,15 +881,22 @@ impl<T: Copy> Join<T> for Vector<&[T]> {
 }
 
 #[cfg(feature = "slice_concat_trait")]
-impl<T> Join<[T]> for Vector<Vector<T>> where T: Copy, [T]: Sized {
+impl<T> Join<[T]> for Vector<Vector<T>>
+where
+    T: Copy,
+    [T]: Sized,
+{
     type Output = Vector<T>;
 
     fn join(slice: &Self, sep: [T]) -> Self::Output {
         let first = match slice.first() {
             Some(vec) => vec,
-            None => return Vector::new(0)
+            None => return Vector::new(0),
         };
-        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + 1 + curr.len());
+        let size = slice
+            .iter()
+            .skip(1)
+            .fold(first.len(), |prev, curr| prev + 1 + curr.len());
 
         let mut result = Vector::with_capacity(size);
         result.extend_from_slice(first);
@@ -798,9 +917,12 @@ impl<T: Copy> Concat<T> for Vector<Vector<T>> {
     fn concat(slice: &Self) -> Self::Output {
         let first = match slice.first() {
             Some(vec) => vec,
-            None => return Vector::new(0)
+            None => return Vector::new(0),
         };
-        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + curr.len());
+        let size = slice
+            .iter()
+            .skip(1)
+            .fold(first.len(), |prev, curr| prev + curr.len());
 
         let mut result = Vector::with_capacity(size);
         result.extend_from_slice(first);
@@ -820,9 +942,12 @@ impl<T: Copy> Concat<T> for Vector<&[T]> {
     fn concat(slice: &Self) -> Self::Output {
         let first = match slice.first() {
             Some(vec) => vec,
-            None => return Vector::new(0)
+            None => return Vector::new(0),
         };
-        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + curr.len());
+        let size = slice
+            .iter()
+            .skip(1)
+            .fold(first.len(), |prev, curr| prev + curr.len());
 
         let mut result = Vector::with_capacity(size);
         result.extend_from_slice(first);
@@ -836,15 +961,22 @@ impl<T: Copy> Concat<T> for Vector<&[T]> {
 }
 
 #[cfg(feature = "slice_concat_trait")]
-impl<T> Concat<[T]> for Vector<[T]> where T: Copy, [T]: Sized {
+impl<T> Concat<[T]> for Vector<[T]>
+where
+    T: Copy,
+    [T]: Sized,
+{
     type Output = Vector<T>;
 
     fn concat(slice: &Self) -> Self::Output {
         let first = match slice.first() {
             Some(vec) => vec,
-            None => return Vector::new(0)
+            None => return Vector::new(0),
         };
-        let size = slice.iter().skip(1).fold(first.len(), |prev, curr| prev + curr.len());
+        let size = slice
+            .iter()
+            .skip(1)
+            .fold(first.len(), |prev, curr| prev + curr.len());
 
         let mut result = Vector::with_capacity(size);
         result.extend_from_slice(first);
