@@ -711,7 +711,7 @@ impl<T> Index<RangeTo<usize>> for Vector<T> {
     #[inline]
     fn index(&self, range: RangeTo<usize>) -> &Self::Output {
         // UNSAFE: Only way for this is to expose from raw parts
-        debug_assert!(range.end < self.len);
+        debug_assert!(range.end <= self.len);
         unsafe { from_raw_parts(self.ptr.as_ptr(), range.end) }
     }
 }
@@ -741,7 +741,7 @@ impl<T> IndexMut<Range<usize>> for Vector<T> {
     #[inline]
     fn index_mut(&mut self, range: Range<usize>) -> &mut [T] {
         // UNSAFE: Only way for this is to expose from raw parts
-        debug_assert!(range.start < self.len && range.end < self.len);
+        debug_assert!(range.start < self.len && range.end <= self.len);
         unsafe {
             &mut *from_raw_parts_mut(
                 self.ptr.as_ptr().add(range.start),
